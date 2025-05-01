@@ -87,7 +87,7 @@ export default async function handler(req, res) {
 
         // --- Call OpenAI API ---
         const completion = await openai.chat.completions.create({
-            model: "gpt-3.5-turbo", // Or "gpt-4" if you have access and need higher accuracy
+            model: "gpt-4o-mini", // Or "gpt-4" if you have access and need higher accuracy
             messages: [
                 { role: "system", content: systemMessage },
                 { role: "user", content: userMessage },
