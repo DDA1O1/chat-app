@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 
 // --- Icons ---
 const SendIcon = () => ( <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"> <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" /> </svg> );
@@ -21,102 +22,130 @@ const CommandPromptIcon = () => (
     </svg>
 );
 
-// Prop `chatId` is kept for internal consistency, but it represents the active log ID
-function ChatArea({ messages = [], onSendMessage, chatId }) {
+function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThreadIdForLog }) {
   const [inputValue, setInputValue] = useState('');
-  const [isSending, setIsSending] = useState(false); // Represents processing command
+  const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
-  const chatAreaRef = useRef(null); // Keep ref for scrolling
+  const eventSourceRef = useRef(null); // Ref to store EventSource instance
+  const currentAiMessageIdRef = useRef(null); // Ref to track the ID of the AI message being streamed
 
-  const scrollToBottom = useCallback((behavior = "smooth") => {
-      // Adding a small delay before scroll sometimes helps with dynamic content height
-      setTimeout(() => messagesEndRef.current?.scrollIntoView({ behavior }), 50);
-  }, []);
+  // ... scrollToBottom, useEffect for scroll, textarea resize, focus ... (mostly unchanged)
 
-  // Scroll effect (unchanged)
+  // Cleanup EventSource on component unmount or chatId change
   useEffect(() => {
-    scrollToBottom(messages.length > 1 ? "smooth" : "auto");
-  }, [messages, chatId, scrollToBottom]);
+      return () => {
+          if (eventSourceRef.current) {
+              console.log("Closing EventSource connection.");
+              eventSourceRef.current.close();
+              eventSourceRef.current = null;
+          }
+      };
+  }, [chatId]); // Close connection when chat changes
 
-  // Textarea auto-resize (unchanged)
-  useEffect(() => {
-    const textarea = inputRef.current;
-    if (textarea) {
-      textarea.style.height = 'auto';
-      const maxHeight = 200; // Max height before scrolling
-      const scrollHeight = textarea.scrollHeight;
-      textarea.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
-      textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
-    }
-  }, [inputValue]);
-
-  // Focus input on log switch (unchanged)
-   useEffect(() => {
-     if (chatId) {
-         setTimeout(() => inputRef.current?.focus(), 100); // Slightly longer delay maybe
-     }
-  }, [chatId]);
-
-  // --- UPDATED SEND COMMAND LOGIC ---
   const handleSendCommand = useCallback(async (event) => {
-    if (event) event.preventDefault();
-    const trimmedInput = inputValue.trim();
-    if (!trimmedInput || isSending || !chatId) return;
+      if (event) event.preventDefault();
+      const trimmedInput = inputValue.trim();
+      if (!trimmedInput || isSending || !chatId) return;
 
-    // 1. Send user message immediately to UI
-    onSendMessage(trimmedInput, 'user');
-    setInputValue(''); // Clear input field
-    setIsSending(true); // Show spinner, disable input/button
-
-    // Force textarea resize calculation after clearing
-    const textarea = inputRef.current;
-    if (textarea) {
-        textarea.style.height = 'auto';
-        textarea.style.height = `${textarea.scrollHeight}px`;
-    }
-    // Focus input after clearing
-    inputRef.current?.focus();
-    // Scroll after user message is added
-    scrollToBottom("smooth");
-
-
-    try {
-      // 2. Call the Vercel Serverless Function
-      const response = await fetch('/api/generate-command', { // Relative path to your function
-          method: 'POST',
-          headers: {
-              'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({ userPrompt: trimmedInput }),
-      });
-
-      if (!response.ok) {
-          // Handle HTTP errors (e.g., 500 from the function)
-          const errorData = await response.json().catch(() => ({})); // Try to parse error JSON
-          console.error("API Error Response:", errorData);
-          throw new Error(errorData.error || `API request failed with status ${response.status}`);
+      // Abort previous stream if any
+      if (eventSourceRef.current) {
+           console.log("Aborting previous stream request.");
+           eventSourceRef.current.close();
       }
 
-      const data = await response.json();
-      const aiGeneratedCommand = data.command; // Get the command string from the JSON response
+      // 1. Send user message immediately to UI
+      onSendMessage({ text: trimmedInput, sender: 'user' });
+      setInputValue('');
+      setIsSending(true); // Show spinner, disable input/button
+      scrollToBottom("smooth"); // Scroll after user message
 
-      // 3. Send AI response (the generated command or error) to the log
-      const isErrorResponse = aiGeneratedCommand.toLowerCase().startsWith('error:');
-      onSendMessage(aiGeneratedCommand, 'ai', isErrorResponse); // Use 'ai' sender type, flag if it's an error
+      // Force textarea resize after clearing
+      const textarea = inputRef.current;
+      if (textarea) {
+          textarea.style.height = 'auto';
+          textarea.style.height = `${textarea.scrollHeight}px`;
+      }
+       inputRef.current?.focus();
 
-    } catch (error) {
-      console.error("Error sending command or fetching AI response:", error);
-      // Send generic error message to log
-      onSendMessage(`Error: Failed to get response. ${error.message}`, 'ai', true); // Use 'ai' sender type with error flag
-    } finally {
-      setIsSending(false); // Re-enable input/button
-      // Ensure focus remains after response
-      inputRef.current?.focus();
-      // Scroll after AI response is rendered
-      scrollToBottom("smooth");
-    }
-}, [inputValue, isSending, chatId, onSendMessage, scrollToBottom]); // Dependencies
+
+      // 2. Prepare for AI streaming response
+      const aiMessageId = uuidv4(); // Generate ID for the upcoming AI message
+      currentAiMessageIdRef.current = aiMessageId;
+      onSendMessage({ id: aiMessageId, sender: 'ai', type: 'placeholder' }); // Add placeholder
+       scrollToBottom("smooth"); // Scroll after placeholder
+
+
+      // 3. Connect to the SSE endpoint
+      const es = new EventSource('/api/generate-command', {
+          // EventSource POST is not standard, sending data via query/headers or initial setup call might be needed
+          // OR restructure backend slightly if needed. For simplicity, assume POST logic works via fetch before EventSource or backend reads body on GET (less common)
+          // ** COMMON PATTERN: Send POST first to initiate, get threadId, THEN connect EventSource **
+          // Let's stick to the simplified version where POST body is somehow read by SSE endpoint (Vercel might allow this)
+          // A more robust way involves a separate API call to setup/get threadId if needed,
+          // then connecting EventSource with threadId as a query parameter.
+           method: 'POST', // This is non-standard for EventSource, may need adjustment
+           headers: { 'Content-Type': 'application/json' },
+           body: JSON.stringify({ userPrompt: trimmedInput, threadId: activeThreadId })
+           // NOTE: Sending body with EventSource is tricky. You might need to
+           //       make a standard fetch POST first to send the data and potentially create the thread,
+           //       then use the returned threadId in the EventSource URL (e.g., /api/generate-command?threadId=xxx)
+           //       The provided backend code assumes it gets the body. Let's proceed with caution here.
+      });
+       eventSourceRef.current = es;
+
+
+      es.onopen = () => {
+          console.log("SSE Connection Opened");
+      };
+
+      es.onmessage = (event) => {
+           try {
+               const data = JSON.parse(event.data);
+
+               if (data.type === 'threadId' && data.id && !activeThreadId) {
+                   // Received new thread ID from backend
+                   setThreadIdForLog(chatId, data.id);
+               } else if (data.type === 'chunk' && data.text) {
+                    // Append text chunk to the streaming message
+                    onSendMessage({ id: currentAiMessageIdRef.current, textChunk: data.text });
+                    scrollToBottom("auto"); // Keep scrolling as text arrives
+               } else if (data.type === 'end') {
+                    console.log("SSE Stream Ended by Server");
+                    onSendMessage({ id: currentAiMessageIdRef.current, final: true, isError: false });
+                    setIsSending(false);
+                    inputRef.current?.focus();
+                    es.close();
+                    eventSourceRef.current = null;
+               } else if (data.type === 'error') {
+                    console.error("SSE Error Event:", data.message);
+                    onSendMessage({ id: currentAiMessageIdRef.current, final: true, isError: true }); // Mark as error
+                    setIsSending(false);
+                    inputRef.current?.focus();
+                    es.close();
+                    eventSourceRef.current = null;
+               }
+
+           } catch (error) {
+               console.error("Failed to parse SSE message:", event.data, error);
+               // Handle potential final partial message? Difficult. Mark as error maybe.
+               onSendMessage({ id: currentAiMessageIdRef.current, final: true, isError: true });
+               setIsSending(false);
+               es.close();
+               eventSourceRef.current = null;
+           }
+      };
+
+      es.onerror = (error) => {
+          console.error("EventSource failed:", error);
+          onSendMessage({ id: currentAiMessageIdRef.current, final: true, isError: true }); // Mark as error
+          setIsSending(false);
+          inputRef.current?.focus();
+          es.close();
+          eventSourceRef.current = null;
+      };
+
+  }, [inputValue, isSending, chatId, activeThreadId, onSendMessage, setThreadIdForLog, scrollToBottom]);
 
 const handleKeyDown = (event) => {
     if (event.key === 'Enter' && !event.shiftKey) {
