@@ -58,189 +58,167 @@ function ChatArea({ messages = [], onSendMessage, chatId }) {
      }
   }, [chatId]);
 
-  // --- UPDATED SEND MESSAGE LOGIC ---
+  // --- UPDATED SEND COMMAND LOGIC ---
   const handleSendCommand = useCallback(async (event) => {
-       if (event) event.preventDefault();
-       const trimmedInput = inputValue.trim();
-       // Check if not processing and there's a command and an active log
-       if (!trimmedInput || isSending || !chatId) return;
+    if (event) event.preventDefault();
+    const trimmedInput = inputValue.trim();
+    if (!trimmedInput || isSending || !chatId) return;
 
-       setIsSending(true); // Robot starts processing
-       setInputValue('');
-       // Send user command to the log
-       onSendMessage(trimmedInput, 'user');
-       // Focus input immediately after clearing for better UX
-       inputRef.current?.focus();
-       // Force textarea resize calculation after clearing
-       const textarea = inputRef.current;
-        if (textarea) {
-            textarea.style.height = 'auto'; // Reset height before potential response
-            textarea.style.height = `${textarea.scrollHeight}px`;
-        }
+    // 1. Send user message immediately to UI
+    onSendMessage(trimmedInput, 'user');
+    setInputValue(''); // Clear input field
+    setIsSending(true); // Show spinner, disable input/button
 
-
-       try {
-         // Simulate robot processing time
-         await new Promise(resolve => setTimeout(resolve, 800 + Math.random() * 700));
-
-         // --- ROBOT-LIKE SIMULATED RESPONSES ---
-         let robotResponse;
-         const lowerCaseInput = trimmedInput.toLowerCase();
-
-         if (lowerCaseInput.startsWith("pick up") || lowerCaseInput.startsWith("get the")) {
-             robotResponse = `Acknowledged. Executing: "${trimmedInput}".`;
-         } else if (lowerCaseInput.startsWith("move") || lowerCaseInput.startsWith("go to")) {
-             robotResponse = `Command received: "${trimmedInput}". Proceeding with movement.` ;
-         } else if (lowerCaseInput.includes("status") || lowerCaseInput.includes("report")) {
-             robotResponse = `Current Status: Idle. Battery: 87%. Awaiting next command.`;
-         } else if (lowerCaseInput === "stop" || lowerCaseInput === "cancel") {
-             robotResponse = `Execution halted. Awaiting further instructions.`;
-         } else if (lowerCaseInput.includes("hello") || lowerCaseInput.includes("hi")) {
-            robotResponse = "System online. Ready for commands.";
-         } else {
-             robotResponse = `Processing command: "${trimmedInput}"... Task simulated as complete.`;
-         }
-
-         // Send robot response to the log
-         onSendMessage(robotResponse, 'ai'); // Use 'ai' sender type internally for styling
-
-       } catch (error) {
-         console.error("Error simulating robot response:", error);
-         // Send error message to log
-         onSendMessage("Error: Could not process the command.", 'ai', true); // Use 'ai' sender type with error flag
-       } finally {
-         setIsSending(false); // Robot finished processing
-         // Ensure focus remains after response
-         inputRef.current?.focus();
-         // Scroll after response is rendered
-         scrollToBottom("smooth");
-       }
-  }, [inputValue, isSending, chatId, onSendMessage, scrollToBottom]);
-
-  // Handle Enter key to send command (unchanged)
-  const handleKeyDown = (event) => {
-       if (event.key === 'Enter' && !event.shiftKey) {
-          event.preventDefault();
-          handleSendCommand();
-       }
-  };
+    // Force textarea resize calculation after clearing
+    const textarea = inputRef.current;
+    if (textarea) {
+        textarea.style.height = 'auto';
+        textarea.style.height = `${textarea.scrollHeight}px`;
+    }
+    // Focus input after clearing
+    inputRef.current?.focus();
+    // Scroll after user message is added
+    scrollToBottom("smooth");
 
 
-  return (
-    <div className="flex-1 flex flex-col bg-gray-800 text-gray-100 overflow-hidden">
-      {/* Command/Response Display Area */}
-      {/* Changed scrollbar color slightly */}
-      <div ref={chatAreaRef} className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-500 hover:scrollbar-thumb-gray-400 scrollbar-track-gray-800">
-        {!chatId ? (
-           // State when no log is selected
-           <div className="flex flex-col items-center justify-center h-full text-gray-500">
-              <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-16 h-16 text-gray-600 mb-4">
-                <path strokeLinecap="round" strokeLinejoin="round" d="M17.25 6.75 22.5 12l-5.25 5.25m-10.5 0L1.5 12l5.25-5.25m7.5-3-4.5 16.5" />
-              </svg>
-             {/* Updated text */}
-             <h2 className="text-xl font-medium mt-2">Select a task log or start a new one</h2>
-             <p className="text-sm mt-1">Your command history will appear here.</p>
-           </div>
-        ) : messages.length === 0 && chatId ? (
-           // --- UPDATED EMPTY STATE FOR ACTIVE LOG ---
+    try {
+      // 2. Call the Vercel Serverless Function
+      const response = await fetch('/api/generate-command', { // Relative path to your function
+          method: 'POST',
+          headers: {
+              'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({ userPrompt: trimmedInput }),
+      });
+
+      if (!response.ok) {
+          // Handle HTTP errors (e.g., 500 from the function)
+          const errorData = await response.json().catch(() => ({})); // Try to parse error JSON
+          console.error("API Error Response:", errorData);
+          throw new Error(errorData.error || `API request failed with status ${response.status}`);
+      }
+
+      const data = await response.json();
+      const aiGeneratedCommand = data.command; // Get the command string from the JSON response
+
+      // 3. Send AI response (the generated command or error) to the log
+      const isErrorResponse = aiGeneratedCommand.toLowerCase().startsWith('error:');
+      onSendMessage(aiGeneratedCommand, 'ai', isErrorResponse); // Use 'ai' sender type, flag if it's an error
+
+    } catch (error) {
+      console.error("Error sending command or fetching AI response:", error);
+      // Send generic error message to log
+      onSendMessage(`Error: Failed to get response. ${error.message}`, 'ai', true); // Use 'ai' sender type with error flag
+    } finally {
+      setIsSending(false); // Re-enable input/button
+      // Ensure focus remains after response
+      inputRef.current?.focus();
+      // Scroll after AI response is rendered
+      scrollToBottom("smooth");
+    }
+}, [inputValue, isSending, chatId, onSendMessage, scrollToBottom]); // Dependencies
+
+const handleKeyDown = (event) => {
+    if (event.key === 'Enter' && !event.shiftKey) {
+       event.preventDefault();
+       handleSendCommand();
+    }
+};
+
+
+return (
+  <div className="flex-1 flex flex-col bg-gray-800 text-gray-100 overflow-hidden">
+    {/* Command/Response Display Area (Keep this section as is) */}
+    <div ref={chatAreaRef} className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-500 hover:scrollbar-thumb-gray-400 scrollbar-track-gray-800">
+      {/* ... existing logic for displaying messages, empty states ... */}
+       {!chatId ? (
+          <div className="flex flex-col items-center justify-center h-full text-gray-500">
+              {/* ... no chat selected icon and text ... */}
+              <h2 className="text-xl font-medium mt-2">Select a task log or start a new one</h2>
+              <p className="text-sm mt-1">Your command history will appear here.</p>
+          </div>
+       ) : messages.length === 0 && chatId ? (
            <div className="flex flex-col items-center justify-center h-full text-center px-4 animate-fade-in">
-             {/* Icon Container - using accent color */}
-             <div className="w-16 h-16 bg-gradient-to-br from-gray-700 to-gray-800 border border-teal-500/50 rounded-full mb-5 flex items-center justify-center shadow-lg">
-                <CommandPromptIcon /> {/* Changed icon */}
-             </div>
-             {/* Main Heading */}
-             <h2 className="text-2xl font-semibold text-gray-200">
-               Issue Robot Commands
-             </h2>
-             {/* Subheading with instructions */}
-             <p className="text-base text-gray-400 mt-2 max-w-lg">
-               Use simple, plain English to control the robot. Describe the task you want it to perform.
-               <br /> Example: <code className="text-teal-300 bg-gray-700 px-1 py-0.5 rounded text-sm">'Pick up the red cube'</code> or <code className="text-teal-300 bg-gray-700 px-1 py-0.5 rounded text-sm">'Move forward 5 steps'</code>.
-             </p>
+               <div className="w-16 h-16 bg-gradient-to-br from-gray-700 to-gray-800 border border-teal-500/50 rounded-full mb-5 flex items-center justify-center shadow-lg">
+                  <CommandPromptIcon />
+               </div>
+               <h2 className="text-2xl font-semibold text-gray-200">Issue Robot Commands</h2>
+               <p className="text-base text-gray-400 mt-2 max-w-lg">
+                 Use natural language to control the robot (e.g., <code className="text-teal-300 bg-gray-700 px-1 py-0.5 rounded text-sm">'Fly forward 100 cm'</code> or <code className="text-teal-300 bg-gray-700 px-1 py-0.5 rounded text-sm">'What's the battery level?'</code>).
+               </p>
            </div>
-           // --- END OF UPDATED EMPTY STATE ---
-        ) : (
-          // Display commands and responses
-           messages.map((message) => (
-            <div
-                key={message.id}
-                className={`flex items-start gap-3 animate-fade-in ${
-                // Keep user messages on the right
-                message.sender === 'user' ? 'justify-end' : 'justify-start'
+       ) : (
+         messages.map((message) => (
+          <div
+              key={message.id}
+              className={`flex items-start gap-3 animate-fade-in ${
+              message.sender === 'user' ? 'justify-end' : 'justify-start'
+              }`}
+          >
+              {message.sender === 'ai' && <RobotIcon />}
+              <div
+                className={`max-w-xl lg:max-w-2xl px-4 py-2.5 rounded-lg shadow-md break-words ${
+                    message.sender === 'user'
+                    ? 'bg-blue-600 text-white'
+                    // Highlight AI errors with red border
+                    : `bg-gray-700 text-gray-100 ${message.isError ? 'border border-red-500 ring-1 ring-red-500' : 'border border-transparent'}`
                 }`}
-            >
-                {/* Use RobotIcon for 'ai' sender type */}
-                {message.sender === 'ai' && <RobotIcon />}
-                <div
-                  // Styling for message bubbles (mostly unchanged, maybe slight color tweaks)
-                  className={`max-w-xl lg:max-w-2xl px-4 py-2.5 rounded-lg shadow-md break-words ${
-                      message.sender === 'user'
-                      ? 'bg-blue-600 text-white' // User command bubble
-                      : `bg-gray-700 text-gray-100 ${message.isError ? 'border border-red-500 ring-1 ring-red-500' : 'border border-transparent'}` // Robot response bubble (added transparent border for consistency)
-                  }`}
-                >
-                  {/* Keep line break handling */}
-                  {message.text.split('\n').map((line, index, arr) => (
-                      <React.Fragment key={index}>
-                          {line}
-                          {index < arr.length - 1 && <br />}
-                      </React.Fragment>
-                      ))}
-                </div>
-                {/* Keep UserIcon */}
-                {message.sender === 'user' && <UserIcon />}
-            </div>
-            ))
-        )}
-        <div ref={messagesEndRef} className="h-1" /> {/* Scroll anchor */}
-      </div>
+              >
+                {/* Display multi-line commands correctly */}
+                {message.text.split('\n').map((line, index, arr) => (
+                    <React.Fragment key={index}>
+                        {line}
+                        {index < arr.length - 1 && <br />}
+                    </React.Fragment>
+                    ))}
+              </div>
+              {message.sender === 'user' && <UserIcon />}
+          </div>
+          ))
+       )}
+       <div ref={messagesEndRef} className="h-1" />
+    </div> {/* End Command/Response Display Area */}
 
-      {/* Command Input Area */}
-      {chatId && (
-        // Added subtle top border gradient
-        <div className="bg-gradient-to-t from-gray-900 via-gray-800 to-gray-800 px-4 pb-4 pt-3 border-t border-gray-700/50 shadow- ऊपर">
-            <div className="max-w-3xl mx-auto relative">
-              {/* Form uses handleSendCommand */}
-              <form onSubmit={handleSendCommand} className="relative flex items-end">
-                  <textarea
-                      ref={inputRef}
-                      value={inputValue}
-                      onChange={(e) => setInputValue(e.target.value)}
-                      onKeyDown={handleKeyDown}
-                      // Updated placeholder based on state
-                      placeholder={isSending ? "Robot processing command..." : "Enter command for the robot..."}
-                      aria-label="Command input" // Updated label
-                      rows="1"
-                      // Slightly adjusted styling for input
-                      className="flex-1 resize-none border border-gray-600 bg-gray-700/80 rounded-xl py-3 pl-4 pr-12 text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-gray-700 transition-all duration-150 shadow-inner"
-                      style={{ minHeight: '52px' }} // Keep min height
-                      disabled={isSending || !chatId} // Disable while processing or if no log selected
-                  />
-                  <button
-                      type="submit"
-                      // Adjusted button styling, using accent color
-                      className={`absolute right-2.5 bottom-[11px] flex items-center justify-center h-8 w-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-teal-500 transition-all duration-150 ${
-                          inputValue.trim() && !isSending
-                          ? 'bg-teal-600 hover:bg-teal-700 text-white scale-100 hover:scale-105 active:scale-100' // Active state
-                          : 'bg-gray-600 text-gray-400 cursor-not-allowed scale-100'
-                      }`}
-                      disabled={!inputValue.trim() || isSending || !chatId}
-                      aria-label="Send command" // Updated label
-                      title="Send command" // Updated title
-                  >
-                      {/* Use SpinnerIcon when processing */}
-                      {isSending ? <SpinnerIcon /> : <SendIcon />}
-                  </button>
-              </form>
-              {/* --- UPDATED DISCLAIMER --- */}
-              <p className="text-xs text-gray-500 text-center mt-2 px-2">
-                  Robot actions based on commands may require verification. Ensure commands are clear.
-              </p>
-            </div>
-        </div>
-      )}
-    </div>
-  );
+    {/* Command Input Area (Keep mostly as is, placeholder/labels updated) */}
+    {chatId && (
+      <div className="bg-gradient-to-t from-gray-900 via-gray-800 to-gray-800 px-4 pb-4 pt-3 border-t border-gray-700/50 shadow- ઉપર">
+          <div className="max-w-3xl mx-auto relative">
+            <form onSubmit={handleSendCommand} className="relative flex items-end">
+                <textarea
+                    ref={inputRef}
+                    value={inputValue}
+                    onChange={(e) => setInputValue(e.target.value)}
+                    onKeyDown={handleKeyDown}
+                    placeholder={isSending ? "AI generating command..." : "Enter natural language command..."}
+                    aria-label="Command input"
+                    rows="1"
+                    className="flex-1 resize-none border border-gray-600 bg-gray-700/80 rounded-xl py-3 pl-4 pr-12 text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-gray-700 transition-all duration-150 shadow-inner"
+                    style={{ minHeight: '52px' }}
+                    disabled={isSending || !chatId} // Disable while AI is processing
+                />
+                <button
+                    type="submit"
+                    className={`absolute right-2.5 bottom-[11px] flex items-center justify-center h-8 w-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-teal-500 transition-all duration-150 ${
+                        inputValue.trim() && !isSending
+                        ? 'bg-teal-600 hover:bg-teal-700 text-white scale-100 hover:scale-105 active:scale-100'
+                        : 'bg-gray-600 text-gray-400 cursor-not-allowed scale-100'
+                    }`}
+                    disabled={!inputValue.trim() || isSending || !chatId}
+                    aria-label="Send command to AI"
+                    title="Send command to AI"
+                >
+                    {isSending ? <SpinnerIcon /> : <SendIcon />}
+                </button>
+            </form>
+            {/* Updated Disclaimer */}
+            <p className="text-xs text-gray-500 text-center mt-2 px-2">
+                AI will translate your command. Verify generated SDK commands before execution if possible.
+            </p>
+          </div>
+      </div>
+    )} {/* End Command Input Area */}
+  </div>
+);
 }
 
 export default ChatArea;
