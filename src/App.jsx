@@ -3,157 +3,157 @@ import { v4 as uuidv4 } from 'uuid'; // For unique IDs
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
 
-const LOCAL_STORAGE_KEY = 'reactChatAppHistory';
+// Changed key for clarity, reflects the new purpose
+const LOCAL_STORAGE_KEY = 'robotControlAppHistory';
 
 function App() {
-  const [chatHistory, setChatHistory] = useState([]); // Stores all chats: [{ id, title, messages: [], createdAt }]
-  const [activeChatId, setActiveChatId] = useState(null); // ID of the currently selected chat
+  // State variable names kept for simplicity, but conceptually they hold 'tasks' or 'command logs'
+  const [commandHistory, setCommandHistory] = useState([]); // Stores all command logs: [{ id, title, messages: [], createdAt }]
+  const [activeLogId, setActiveLogId] = useState(null); // ID of the currently selected command log
 
-  // Load chat history AND set initial active chat
+  // Load command history AND set initial active log
   useEffect(() => {
     let loadedSuccessfully = false;
     try {
       const storedHistory = localStorage.getItem(LOCAL_STORAGE_KEY);
       if (storedHistory) {
         let parsedHistory = JSON.parse(storedHistory);
-        // Ensure it's an array before proceeding
         if (Array.isArray(parsedHistory) && parsedHistory.length > 0) {
-          // Sort history by createdAt descending (newest first)
-          // Add fallback for potential old data without createdAt
-          parsedHistory.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-
-          setChatHistory(parsedHistory);
-          setActiveChatId(parsedHistory[0].id); // Activate the newest chat
+          parsedHistory.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); // Newest first
+          setCommandHistory(parsedHistory);
+          setActiveLogId(parsedHistory[0].id); // Activate the newest log
           loadedSuccessfully = true;
         }
       }
     } catch (error) {
-      console.error("Failed to load or parse chat history from local storage:", error);
-      // Proceed to default behavior (create new chat)
+      // Updated error message
+      console.error("Failed to load or parse command history from local storage:", error);
     }
 
-    // If loading failed or history was empty, create a new chat
+    // If loading failed or history was empty, create a new log
     if (!loadedSuccessfully) {
-      console.log("No valid chat history found, creating a new chat.");
-      const newChatId = uuidv4();
-      const newChat = {
-        id: newChatId,
-        title: 'New Chat',
+      // Updated log message
+      console.log("No valid command history found, creating a new task log.");
+      const newLogId = uuidv4();
+      const newLog = {
+        id: newLogId,
+        // Changed default title
+        title: 'New Task Sequence',
         messages: [],
         createdAt: Date.now()
       };
-      setChatHistory([newChat]); // Initialize history with the new chat
-      setActiveChatId(newChatId); // Activate the new chat
+      setCommandHistory([newLog]); // Initialize history with the new log
+      setActiveLogId(newLogId); // Activate the new log
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []); // Run only once on initial mount
 
-  // Save chat history to local storage whenever it changes
+  // Save command history to local storage whenever it changes
   useEffect(() => {
-    // Prevent saving initial empty array if we immediately create a new chat
-    if (chatHistory.length > 0 || localStorage.getItem(LOCAL_STORAGE_KEY)) {
+    if (commandHistory.length > 0 || localStorage.getItem(LOCAL_STORAGE_KEY)) {
        try {
-         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(chatHistory));
+         // Updated save message
+         localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(commandHistory));
        } catch (error) {
-         console.error("Failed to save chat history to local storage:", error);
+         // Updated error message
+         console.error("Failed to save command history to local storage:", error);
        }
     }
-  }, [chatHistory]);
+  }, [commandHistory]);
 
-  // --- Rest of the App.jsx component remains the same ---
-  // (activeChatMessages, handleNewChat, handleSelectChat, handleDeleteChat, addMessageToActiveChat, return statement)
+  // Get messages for the currently active command log
+  const activeLogMessages = useCallback(() => {
+    const activeLog = commandHistory.find(log => log.id === activeLogId);
+    return activeLog ? activeLog.messages : [];
+  }, [commandHistory, activeLogId]);
 
-  // Get messages for the currently active chat
-  const activeChatMessages = useCallback(() => {
-    const activeChat = chatHistory.find(chat => chat.id === activeChatId);
-    return activeChat ? activeChat.messages : [];
-  }, [chatHistory, activeChatId]);
-
-  // Function to handle starting a new chat
-  const handleNewChat = useCallback(() => {
-    const newChatId = uuidv4();
-    const newChat = {
-        id: newChatId,
-        title: 'New Chat', // Temporary title
+  // Function to handle starting a new task/command log
+  const handleNewTask = useCallback(() => {
+    const newLogId = uuidv4();
+    const newLog = {
+        id: newLogId,
+        // Changed default title
+        title: 'New Task Sequence', // Temporary title
         messages: [],
         createdAt: Date.now() // Track creation time
     };
-    // Add to the beginning of the history state for immediate UI update
-    setChatHistory(prevHistory => [newChat, ...prevHistory]);
-    setActiveChatId(newChatId);
+    // Add to the beginning of the history state
+    setCommandHistory(prevHistory => [newLog, ...prevHistory]);
+    setActiveLogId(newLogId);
   }, []);
 
-  // Function to select an existing chat
-  const handleSelectChat = useCallback((chatId) => {
-    setActiveChatId(chatId);
+  // Function to select an existing command log
+  const handleSelectLog = useCallback((logId) => {
+    setActiveLogId(logId);
   }, []);
 
-   // Function to delete a chat
-   const handleDeleteChat = useCallback((chatIdToDelete) => {
-    setChatHistory(prevHistory => {
-        const updatedHistory = prevHistory.filter(chat => chat.id !== chatIdToDelete);
-         // If the deleted chat was active, select the newest remaining chat, or null if none left
-        if (activeChatId === chatIdToDelete) {
+   // Function to delete a command log
+   const handleDeleteLog = useCallback((logIdToDelete) => {
+    setCommandHistory(prevHistory => {
+        const updatedHistory = prevHistory.filter(log => log.id !== logIdToDelete);
+        // If the deleted log was active, select the newest remaining log
+        if (activeLogId === logIdToDelete) {
             if (updatedHistory.length > 0) {
-                // Sort again to be sure the first one is the newest after deletion
                 updatedHistory.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-                setActiveChatId(updatedHistory[0].id);
+                setActiveLogId(updatedHistory[0].id);
             } else {
-                setActiveChatId(null); // No chats left
+                setActiveLogId(null); // No logs left
             }
         }
         return updatedHistory; // Return the filtered history
     });
-   }, [activeChatId]);
+   }, [activeLogId]);
 
 
-  // Function to add a message to the active chat
-  const addMessageToActiveChat = useCallback((text, sender, isError = false) => {
-    if (!activeChatId) {
-        console.warn("Attempted to add message with no active chat ID.");
+  // Function to add a message (command or response) to the active log
+  const addMessageToActiveLog = useCallback((text, sender, isError = false) => {
+    if (!activeLogId) {
+        // Updated warning
+        console.warn("Attempted to add message with no active command log ID.");
         return;
     }
 
-    setChatHistory(prevHistory =>
-      prevHistory.map(chat => {
-        if (chat.id === activeChatId) {
-          const newTitle = (chat.title === 'New Chat' && sender === 'user' && chat.messages.length === 0)
-            ? text.substring(0, 35).trim() + (text.length > 35 ? '...' : '')
-            : chat.title;
+    setCommandHistory(prevHistory =>
+      prevHistory.map(log => {
+        if (log.id === activeLogId) {
+          // Update title based on the first user command, if it's the default title
+          const newTitle = (log.title === 'New Task Sequence' && sender === 'user' && log.messages.length === 0)
+            ? text.substring(0, 35).trim() + (text.length > 35 ? '...' : '') // Keep title generation logic
+            : log.title;
 
           return {
-            ...chat,
+            ...log,
             title: newTitle,
             messages: [
-              ...chat.messages,
+              ...log.messages,
               { id: uuidv4(), text, sender, timestamp: Date.now(), isError }
             ]
           };
         }
-        return chat;
-      }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) // Keep history sorted by creation date
+        return log;
+      }).sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)) // Keep history sorted
     );
-  }, [activeChatId]);
+  }, [activeLogId]);
 
 
   return (
     <div className="flex h-screen overflow-hidden bg-gray-900 text-gray-100">
       {/* Sidebar */}
       <Sidebar
-        // Ensure chatHistory is always sorted correctly before passing down
-        chatHistory={chatHistory} // Already sorted by state updates
-        activeChatId={activeChatId}
-        onNewChat={handleNewChat}
-        onSelectChat={handleSelectChat}
-        onDeleteChat={handleDeleteChat}
+        // Pass down history and active ID
+        commandHistory={commandHistory} // Pass the history (conceptually command logs)
+        activeLogId={activeLogId}      // Pass the active ID
+        onNewTask={handleNewTask}       // Pass the handler for creating new logs
+        onSelectLog={handleSelectLog}   // Pass the handler for selecting logs
+        onDeleteLog={handleDeleteLog}   // Pass the handler for deleting logs
       />
 
-      {/* Main Chat Area */}
+      {/* Main Command/Response Area */}
       <ChatArea
-        key={activeChatId || 'no-chat-selected'}
-        messages={activeChatMessages()}
-        onSendMessage={addMessageToActiveChat}
-        chatId={activeChatId}
+        key={activeLogId || 'no-log-selected'} // Updated key
+        messages={activeLogMessages()}          // Get messages for the active log
+        onSendMessage={addMessageToActiveLog}   // Handler to add messages/commands
+        chatId={activeLogId} // Pass the active log ID (prop name kept generic for ChatArea reusability, but conceptually it's a log ID)
       />
     </div>
   );
