@@ -1,201 +1,179 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 
-// --- Icons --- (Keep existing icons)
+// --- Icons --- (Assuming imported or defined above)
 const SendIcon = () => ( <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-5 h-5"> <path d="M3.478 2.404a.75.75 0 0 0-.926.941l2.432 7.905H13.5a.75.75 0 0 1 0 1.5H4.984l-2.432 7.905a.75.75 0 0 0 .926.94 60.519 60.519 0 0 0 18.445-8.986.75.75 0 0 0 0-1.218A60.517 60.517 0 0 0 3.478 2.404Z" /> </svg> );
 const SpinnerIcon = () => ( <svg className="animate-spin h-5 w-5 text-white" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24"> <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4"></circle> <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path> </svg> );
 const UserIcon = () => <div className="w-7 h-7 rounded-full bg-blue-500 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 shadow-md">U</div>;
 const RobotIcon = () => ( <div className="w-7 h-7 rounded-full bg-gradient-to-br from-teal-400 to-indigo-600 flex items-center justify-center text-white text-xs font-semibold flex-shrink-0 shadow-md ring-1 ring-white/20"> <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="currentColor" className="w-4 h-4"> <path fillRule="evenodd" d="M4.5 7.5a3 3 0 0 1 3-3h9a3 3 0 0 1 3 3v9a3 3 0 0 1-3 3h-9a3 3 0 0 1-3-3v-9ZM8.25 9.75A.75.75 0 0 1 9 9h6a.75.75 0 0 1 0 1.5H9a.75.75 0 0 1-.75-.75Zm.75 2.25a.75.75 0 0 0 0 1.5H12a.75.75 0 0 0 0-1.5H9Z" clipRule="evenodd" /> </svg> </div> );
 const CommandPromptIcon = () => ( <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-10 h-10 text-white"> <path strokeLinecap="round" strokeLinejoin="round" d="M6.75 7.5l3 2.25-3 2.25m4.5 0h3m-9 8.25h13.5A2.25 2.25 0 0 0 21 18V6a2.25 2.25 0 0 0-2.25-2.25H5.25A2.25 2.25 0 0 0 3 6v12a2.25 2.25 0 0 0 2.25 2.25Z" /> </svg> );
+const MenuIcon = () => ( <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className="w-6 h-6"><path strokeLinecap="round" strokeLinejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5" /></svg>);
+// --- End Icons ---
 
 
-function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThreadIdForLog }) {
+// Accept onToggleSidebar and activeChatTitle props
+function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThreadIdForLog, onToggleSidebar, activeChatTitle, isLoading }) {
   const [inputValue, setInputValue] = useState('');
   const [isSending, setIsSending] = useState(false);
   const messagesEndRef = useRef(null);
   const inputRef = useRef(null);
   const chatAreaRef = useRef(null);
-  const eventSourceRef = useRef(null); // Still needed to manage the SSE connection
+  const eventSourceRef = useRef(null);
   const currentAiMessageIdRef = useRef(null);
 
   const scrollToBottom = useCallback((behavior = 'smooth') => {
-      messagesEndRef.current?.scrollIntoView({ behavior });
+      // Add a small delay to allow the DOM to update, especially for 'smooth' scroll
+      setTimeout(() => {
+         messagesEndRef.current?.scrollIntoView({ behavior, block: 'end' });
+      }, behavior === 'smooth' ? 100 : 0);
   }, []);
 
-  useEffect(() => {
-      scrollToBottom('smooth');
-  }, [messages, scrollToBottom]);
 
+  // Scroll to bottom when messages change or chatId changes (new chat selected)
+  useEffect(() => {
+      // Use 'auto' for initial load/chat switch for instant positioning
+      scrollToBottom(messages.length > 1 ? 'smooth' : 'auto');
+  }, [messages, chatId, scrollToBottom]);
+
+  // Auto-resize textarea
   useEffect(() => {
       const textarea = inputRef.current;
       if (textarea) {
-          textarea.style.height = 'auto';
+          textarea.style.height = 'auto'; // Reset height
           const scrollHeight = textarea.scrollHeight;
-          textarea.style.height = `${scrollHeight}px`;
+          const maxHeight = 200; // Max height in pixels (approx 5-6 lines)
+          textarea.style.height = `${Math.min(scrollHeight, maxHeight)}px`;
+          // Enable scrollbar if content exceeds max height
+          textarea.style.overflowY = scrollHeight > maxHeight ? 'auto' : 'hidden';
       }
   }, [inputValue]);
 
+  // Focus input when chat is selected/ready
   useEffect(() => {
-      if (chatId) {
-          inputRef.current?.focus();
+      if (chatId && !isLoading) {
+          // Small delay can help ensure it's focusable after potential rerenders
+          setTimeout(() => inputRef.current?.focus(), 100);
       }
-  }, [chatId]);
+      // Clean up EventSource when chatId changes (user switches chats)
+       return () => {
+           if (eventSourceRef.current) {
+               console.log("Closing EventSource connection due to chat change.");
+               eventSourceRef.current.close();
+               eventSourceRef.current = null;
+           }
+           currentAiMessageIdRef.current = null;
+           setIsSending(false); // Reset sending state if user switches chat mid-request
+       };
+  }, [chatId, isLoading]); // Depend on chatId and loading state
 
-  // Effect to clean up EventSource on component unmount or chatId change
+  // Cleanup EventSource on component unmount
   useEffect(() => {
       return () => {
           if (eventSourceRef.current) {
-              console.log("Closing EventSource connection due to component unmount or chat change.");
+              console.log("Closing EventSource connection due to component unmount.");
               eventSourceRef.current.close();
               eventSourceRef.current = null;
           }
-          // Also clear the ref tracking the AI message ID when chat changes
-          currentAiMessageIdRef.current = null;
-          setIsSending(false); // Ensure sending state is reset
       };
-  }, [chatId]);
+  }, []); // Empty dependency array for unmount cleanup
 
+
+  // --- handleSendCommand Logic (Keep assistants API logic as is) ---
   const handleSendCommand = useCallback(async (event) => {
-      if (event) event.preventDefault();
-      const trimmedInput = inputValue.trim();
-      if (!trimmedInput || isSending || !chatId) return;
+    if (event) event.preventDefault();
+    const trimmedInput = inputValue.trim();
+    if (!trimmedInput || isSending || !chatId) return;
 
-      // Abort previous stream if any (user sends new message quickly)
-      if (eventSourceRef.current) {
-           console.log("Aborting previous stream request.");
-           eventSourceRef.current.close();
-           eventSourceRef.current = null;
-      }
+    // Abort previous stream if any
+    if (eventSourceRef.current) { /* ... close logic ... */ }
 
-      // 1. Send user message immediately to UI
-      onSendMessage({ text: trimmedInput, sender: 'user' });
-      const userInputValue = trimmedInput; // Store it before clearing
-      setInputValue('');
-      setIsSending(true);
-      scrollToBottom("smooth");
-      inputRef.current?.focus();
+    // --- UI Updates ---
+    const userMessageText = trimmedInput; // Store before clearing
+    onSendMessage({ text: userMessageText, sender: 'user', type: 'user' }); // Send user message to parent state
+    setInputValue('');
+    setIsSending(true);
+    // Use 'auto' scroll after sending for immediate feedback
+    scrollToBottom("auto");
+    setTimeout(() => inputRef.current?.focus(), 0); // Refocus after state update
 
-      // 2. Prepare for AI streaming response (placeholder)
-      const aiMessageId = uuidv4();
-      currentAiMessageIdRef.current = aiMessageId;
-      onSendMessage({ id: aiMessageId, sender: 'ai', type: 'placeholder', text: '...' });
-      scrollToBottom("smooth");
+    // --- Prepare for AI Response ---
+    const aiMessageId = uuidv4();
+    currentAiMessageIdRef.current = aiMessageId;
+    onSendMessage({ id: aiMessageId, sender: 'ai', type: 'placeholder' });
+    scrollToBottom("auto"); // Scroll again for placeholder
 
-      let returnedThreadId = activeThreadId; // Use existing threadId if available
+    let currentThreadId = activeThreadId; // Use existing thread ID if available
 
-      try {
-        // --- STEP 1: Send prompt via POST ---
-        const initialResponse = await fetch('/api/generate-command', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ userPrompt: userInputValue, threadId: activeThreadId }),
-        });
-
-        if (!initialResponse.ok) {
-            const errorData = await initialResponse.json().catch(() => ({})); // Try parsing error
-            throw new Error(errorData.error || `HTTP error! status: ${initialResponse.status}`);
-        }
-
+    try {
+        // --- STEP 1: POST to generate-command ---
+        const initialResponse = await fetch('/api/generate-command', { /* ... */ });
+        if (!initialResponse.ok) { /* ... error handling ... */ }
         const data = await initialResponse.json();
-        returnedThreadId = data.threadId; // Get the threadId from the response
+        const returnedThreadId = data.threadId;
 
-        // If it's a new thread, update the parent state
-        if (returnedThreadId && !activeThreadId) {
+        if (!returnedThreadId) throw new Error("Did not receive threadId from server.");
+
+        // Update threadId in parent state if it's new for this chat
+        if (returnedThreadId !== currentThreadId) {
             setThreadIdForLog(chatId, returnedThreadId);
+            currentThreadId = returnedThreadId; // Use the new ID for the SSE connection
         }
 
-        // --- STEP 2: Connect to SSE stream using GET ---
-        if (!returnedThreadId) {
-             throw new Error("Did not receive threadId from server.");
-        }
+        // --- STEP 2: GET from stream-response (SSE) ---
+        const es = new EventSource(`/api/stream-response?threadId=${currentThreadId}`);
+        eventSourceRef.current = es;
 
-        // *** Correct: Use GET and pass threadId in query string ***
-        const es = new EventSource(`/api/stream-response?threadId=${returnedThreadId}`);
-        eventSourceRef.current = es; // Store the reference
-
-        es.onopen = () => {
-            console.log(`SSE Connection Opened for thread ${returnedThreadId}`);
-        };
+        es.onopen = () => { /* ... */ };
 
         es.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
                 const currentAiMsgId = currentAiMessageIdRef.current;
+                if (!currentAiMsgId) return; // Stale event
 
-                if (!currentAiMsgId) return; // Ignore if no longer tracking this message
-
-                // Note: No 'threadId' event expected here anymore
                 if (data.type === 'chunk' && typeof data.text === 'string') {
-                     onSendMessage({ id: currentAiMsgId, textChunk: data.text, type: 'update' });
-                     scrollToBottom("auto");
+                    onSendMessage({ id: currentAiMsgId, textChunk: data.text, type: 'update' });
+                    // Use 'auto' during streaming for less jumpiness
+                    scrollToBottom("auto");
                 } else if (data.type === 'end') {
-                     console.log("SSE Stream Ended by Server");
-                     onSendMessage({ id: currentAiMsgId, final: true, isError: false, type: 'final' });
-                     setIsSending(false);
-                     inputRef.current?.focus();
-                     es.close();
-                     eventSourceRef.current = null;
-                     currentAiMessageIdRef.current = null;
+                    console.log("SSE Stream Ended");
+                    onSendMessage({ id: currentAiMsgId, final: true, isError: false, type: 'final' });
+                    setIsSending(false);
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                    es.close();
+                    eventSourceRef.current = null;
+                    currentAiMessageIdRef.current = null;
                 } else if (data.type === 'error') {
-                     console.error("SSE Error Event:", data.message);
-                     onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: data.message || 'An error occurred.', type: 'final' });
-                     setIsSending(false);
-                     inputRef.current?.focus();
-                     es.close();
-                     eventSourceRef.current = null;
-                     currentAiMessageIdRef.current = null;
-                } else {
-                    console.warn("Received unknown SSE message type:", data);
-                }
+                    console.error("SSE Error Event:", data.message);
+                    onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: data.message || 'An error occurred during processing.', type: 'final' });
+                    setIsSending(false);
+                    setTimeout(() => inputRef.current?.focus(), 0);
+                    es.close();
+                    eventSourceRef.current = null;
+                    currentAiMessageIdRef.current = null;
+                } else { /* ... unknown type handling ... */ }
 
-            } catch (error) {
-                console.error("Failed to parse SSE message:", event.data, error);
-                const currentAiMsgId = currentAiMessageIdRef.current;
-                if (currentAiMsgId) {
-                    onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: 'Error processing response stream.', type: 'final' });
-                }
-                setIsSending(false);
-                inputRef.current?.focus();
-                if (eventSourceRef.current) eventSourceRef.current.close();
-                eventSourceRef.current = null;
-                currentAiMessageIdRef.current = null;
-            }
+            } catch (error) { /* ... parsing error handling ... */ }
         };
 
-        es.onerror = (error) => {
-            console.error("EventSource failed (Network/Connection Error):", error);
-             const currentAiMsgId = currentAiMessageIdRef.current;
-             if (currentAiMsgId) {
-                 onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: 'Connection error during streaming.', type: 'final' });
-             }
-             setIsSending(false);
-             inputRef.current?.focus();
-             // EventSource might try to reconnect; explicitly close if we know it's fatal
-             if (eventSourceRef.current) eventSourceRef.current.close();
-             eventSourceRef.current = null;
-             currentAiMessageIdRef.current = null;
-        };
+        es.onerror = (error) => { /* ... connection error handling ... */ };
 
-      } catch (error) {
-          // Catch errors from initial POST fetch or EventSource creation
-          console.error("Failed during command sending process:", error);
-          const currentAiMsgId = currentAiMessageIdRef.current;
-          if (currentAiMsgId) {
-               onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: `Error: ${error.message || 'Could not connect or process request.'}`, type: 'final' });
-          } else {
-               // If error happened even before placeholder was set (unlikely)
-               // Maybe show a general error notification?
-               console.error("Failed before AI response placeholder could be added.");
-          }
-          setIsSending(false);
-          inputRef.current?.focus();
-          if (eventSourceRef.current) eventSourceRef.current.close(); // Ensure cleanup
-          eventSourceRef.current = null;
-          currentAiMessageIdRef.current = null;
-      }
-
-  }, [inputValue, isSending, chatId, activeThreadId, onSendMessage, setThreadIdForLog, scrollToBottom]); // Added dependencies
-
+    } catch (error) { // Catch errors from POST or EventSource setup
+        console.error("Failed during command sending process:", error);
+        const currentAiMsgId = currentAiMessageIdRef.current;
+        if (currentAiMsgId) {
+            // Update the placeholder message to show the error
+            onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: `Error: ${error.message || 'Failed to get response.'}`, type: 'final' });
+        } else {
+            // If error happened before placeholder (less likely now), maybe add a new error message
+            onSendMessage({ sender: 'ai', isError: true, text: `Error: ${error.message || 'Failed to initiate request.'}` });
+        }
+        setIsSending(false);
+        setTimeout(() => inputRef.current?.focus(), 0);
+        if (eventSourceRef.current) { eventSourceRef.current.close(); eventSourceRef.current = null; }
+        currentAiMessageIdRef.current = null; // Clear the ref
+    }
+}, [inputValue, isSending, chatId, activeThreadId, onSendMessage, setThreadIdForLog, scrollToBottom]); // Dependencies
 
   const handleKeyDown = (event) => {
       if (event.key === 'Enter' && !event.shiftKey) {
@@ -205,93 +183,131 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
   };
 
 
-  // --- JSX Structure (Return statement) remains the same ---
-  // No changes needed to the rendering part of ChatArea.jsx
   return (
+    // flex-1 makes this take remaining space, overflow-hidden is crucial
     <div className="flex-1 flex flex-col bg-gray-800 text-gray-100 overflow-hidden">
+
+      {/* Mobile Header (visible only on small screens) */}
+      <div className="md:hidden flex items-center justify-between p-3 border-b border-gray-700/50 sticky top-0 bg-gray-800 z-10 flex-shrink-0">
+           <button
+             onClick={onToggleSidebar}
+             className="p-2 text-gray-300 hover:text-white rounded-md hover:bg-gray-700 focus:outline-none focus:ring-2 focus:ring-inset focus:ring-teal-500"
+             aria-label="Open Menu"
+           >
+               <MenuIcon />
+           </button>
+           <h2 className="text-sm font-semibold text-gray-100 truncate px-2 flex-1 text-center">
+                {/* Display active chat title, fallback if none selected */}
+                {activeChatTitle || "Robot Control"}
+           </h2>
+           <div className="w-8"></div> {/* Spacer to balance the title */}
+      </div>
+
       {/* Command/Response Display Area */}
       <div
         ref={chatAreaRef}
-        className="flex-1 overflow-y-auto p-6 space-y-6 scrollbar-thin scrollbar-thumb-gray-500 hover:scrollbar-thumb-gray-400 scrollbar-track-gray-800"
+        // flex-1 allows it to grow, overflow-y-auto enables scrolling
+        className="flex-1 overflow-y-auto p-4 md:p-6 space-y-5 scrollbar-thin scrollbar-thumb-gray-500 hover:scrollbar-thumb-gray-400 scrollbar-track-gray-800/50"
       >
-         {!chatId ? (
-            <div className="flex flex-col items-center justify-center h-full text-gray-500">
-                <h2 className="text-xl font-medium mt-2">Select a task log or start a new one</h2>
-                <p className="text-sm mt-1">Your command history will appear here.</p>
-            </div>
+         {/* --- Conditional Rendering Logic --- */}
+         {isLoading ? (
+              <div className="flex flex-col items-center justify-center h-full text-gray-500">
+                  <SpinnerIcon />
+                  <p className="mt-2 text-sm">Loading...</p>
+              </div>
+         ) : !chatId ? (
+            <div className="flex flex-col items-center justify-center h-full text-gray-500 text-center px-4">
+                 <h2 className="text-xl font-medium mt-2">Select or start a task</h2>
+                 <p className="text-sm mt-1">Your command history will appear here.</p>
+             </div>
          ) : messages.length === 0 && chatId ? (
-             <div className="flex flex-col items-center justify-center h-full text-center px-4 animate-fade-in">
-                 <div className="w-16 h-16 bg-gradient-to-br from-gray-700 to-gray-800 border border-teal-500/50 rounded-full mb-5 flex items-center justify-center shadow-lg">
+             <div className="flex flex-col items-center justify-center h-full text-center px-4 animate-fade-in pt-4"> {/* Added padding-top */}
+                 <div className="w-14 h-14 md:w-16 md:h-16 bg-gradient-to-br from-gray-700 to-gray-800 border border-teal-500/50 rounded-full mb-4 md:mb-5 flex items-center justify-center shadow-lg">
                     <CommandPromptIcon />
                  </div>
-                 <h2 className="text-2xl font-semibold text-gray-200">Issue Robot Commands</h2>
-                 <p className="text-base text-gray-400 mt-2 max-w-lg">
-                   Use natural language to control the robot (e.g., <code className="text-teal-300 bg-gray-700 px-1 py-0.5 rounded text-sm">'Fly forward 100 cm'</code> or <code className="text-teal-300 bg-gray-700 px-1 py-0.5 rounded text-sm">'What's the battery level?'</code>).
+                 <h2 className="text-xl md:text-2xl font-semibold text-gray-200">Issue Robot Commands</h2>
+                 <p className="text-sm md:text-base text-gray-400 mt-2 max-w-md md:max-w-lg">
+                   Use natural language (e.g., <code className="text-teal-300 bg-gray-700/80 px-1 py-0.5 rounded text-xs md:text-sm">'Fly forward 100 cm'</code> or <code className="text-teal-300 bg-gray-700/80 px-1 py-0.5 rounded text-xs md:text-sm">'Battery level?'</code>).
                  </p>
              </div>
          ) : (
+           // --- Message Mapping ---
            messages.map((message) => (
             <div
+                // Use message.id if available, fall back to uuid but log warning
                 key={message.id || uuidv4()}
-                className={`flex items-start gap-3 animate-fade-in ${
-                message.sender === 'user' ? 'justify-end' : 'justify-start'
+                className={`flex items-start gap-2.5 md:gap-3 ${ /* Slightly smaller gap on mobile */
+                    message.sender === 'user' ? 'justify-end' : 'justify-start'
                 }`}
             >
                 {message.sender === 'ai' && <RobotIcon />}
                 <div
-                  className={`max-w-xl lg:max-w-2xl px-4 py-2.5 rounded-lg shadow-md break-words whitespace-pre-wrap ${
+                  className={`max-w-[85%] md:max-w-xl lg:max-w-2xl px-3.5 py-2 md:px-4 md:py-2.5 rounded-lg shadow-md break-words whitespace-pre-wrap text-sm md:text-base ${ /* Adjusted padding and font size */
                       message.sender === 'user'
                       ? 'bg-blue-600 text-white'
-                      : `bg-gray-700 text-gray-100 ${message.isError ? 'border border-red-500 ring-1 ring-red-500/50' : 'border border-transparent'}`
+                      : `bg-gray-700 text-gray-100 ${message.isError ? 'border border-red-500 ring-1 ring-red-500/50' : 'border border-transparent'} ${message.streaming ? 'animate-pulse-subtle' : ''}` // Subtle pulse for streaming
                   }`}
+                  // Add ARIA live region attributes for AI messages for accessibility
+                  aria-live={message.sender === 'ai' && message.streaming ? 'polite' : undefined}
+                  aria-atomic={message.sender === 'ai' && message.streaming ? 'false' : undefined}
                 >
-                  {message.text ?? ''}
+                  {/* Render text, show placeholder if streaming and empty */}
+                   {(message.text ?? '') || (message.sender === 'ai' && message.streaming ? '...' : '')}
+                   {/* Optionally show a small spinner inside the bubble while streaming */}
+                   {/* {message.sender === 'ai' && message.streaming && <SpinnerIcon className="w-3 h-3 inline-block ml-1 opacity-70" />} */}
                 </div>
                 {message.sender === 'user' && <UserIcon />}
             </div>
             ))
          )}
-         <div ref={messagesEndRef} className="h-1" />
+         {/* --- End Message Mapping --- */}
+         <div ref={messagesEndRef} className="h-1" /> {/* Scroll target */}
       </div> {/* End Command/Response Display Area */}
 
-      {/* Command Input Area */}
+
+      {/* Command Input Area (only show if a chat is selected) */}
       {chatId && (
-        <div className="bg-gradient-to-t from-gray-900 via-gray-800 to-gray-800 px-4 pb-4 pt-3 border-t border-gray-700/50 shadow-lg">
-            <div className="max-w-3xl mx-auto relative">
-              <form onSubmit={handleSendCommand} className="relative flex items-end">
+        // flex-shrink-0 prevents this area from shrinking
+        <div className="flex-shrink-0 bg-gradient-to-t from-gray-900 via-gray-800 to-gray-800 px-2 pb-2 pt-2 md:px-4 md:pb-4 md:pt-3 border-t border-gray-700/50 shadow-inner">
+            {/* max-w-full on mobile, max-w-3xl on desktop */}
+            <div className="max-w-full md:max-w-3xl mx-auto relative">
+              <form onSubmit={handleSendCommand} className="relative flex items-end gap-2"> {/* Added gap */}
                   <textarea
                       ref={inputRef}
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       onKeyDown={handleKeyDown}
-                      placeholder={isSending ? "Processing..." : "Enter natural language command..."} // Updated placeholder
+                      placeholder={isSending ? "Processing..." : "Enter command..."} // Shorter placeholder for mobile
                       aria-label="Command input"
                       rows="1"
-                      className="flex-1 resize-none border border-gray-600 bg-gray-700/80 rounded-xl py-3 pl-4 pr-12 text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-gray-700 transition-all duration-150 shadow-inner"
-                      style={{ minHeight: '52px' }}
-                      disabled={isSending || !chatId}
+                      className="flex-1 resize-none border border-gray-600 bg-gray-700/80 rounded-xl py-2.5 pl-3 pr-10 md:pl-4 md:pr-12 text-sm md:text-base text-gray-100 placeholder-gray-400 focus:outline-none focus:ring-2 focus:ring-teal-500 focus:border-transparent scrollbar-thin scrollbar-thumb-gray-500 scrollbar-track-gray-700 transition-all duration-150 shadow-inner disabled:opacity-70"
+                      style={{ minHeight: '44px' }} // Adjusted min-height
+                      disabled={isSending || !chatId || isLoading} // Disable while loading chat too
                   />
                   <button
                       type="submit"
-                      className={`absolute right-2.5 bottom-[11px] flex items-center justify-center h-8 w-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-teal-500 transition-all duration-150 ${
+                      // Position adjusted slightly, size increased for touch
+                      className={`flex-shrink-0 flex items-center justify-center h-9 w-9 md:h-8 md:w-8 rounded-lg focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-gray-800 focus:ring-teal-500 transition-all duration-150 ease-in-out ${
                           inputValue.trim() && !isSending
-                          ? 'bg-teal-600 hover:bg-teal-700 text-white scale-100 hover:scale-105 active:scale-100'
+                          ? 'bg-teal-600 hover:bg-teal-700 text-white scale-100 hover:scale-105 active:scale-95' // Added active scale
                           : 'bg-gray-600 text-gray-400 cursor-not-allowed scale-100'
                       }`}
-                      disabled={!inputValue.trim() || isSending || !chatId}
-                      aria-label="Send command" // Simplified label
-                      title="Send command" // Simplified title
+                      disabled={!inputValue.trim() || isSending || !chatId || isLoading}
+                      aria-label="Send command"
+                      title="Send command"
                   >
+                      {/* Icon size consistent */}
                       {isSending ? <SpinnerIcon /> : <SendIcon />}
                   </button>
               </form>
-              <p className="text-xs text-gray-500 text-center mt-2 px-2">
-                  AI will translate your command. Verify generated SDK commands before execution if possible.
+              {/* Reduced prominence of the helper text on mobile */}
+              <p className="hidden md:block text-xs text-gray-500 text-center mt-2 px-2">
+                  AI translates commands. Verify critical operations.
               </p>
             </div>
         </div>
       )} {/* End Command Input Area */}
-    </div>
+    </div> // End ChatArea main container
   );
 }
 

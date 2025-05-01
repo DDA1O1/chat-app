@@ -1,17 +1,16 @@
-import React, { useState, useEffect, useCallback } from 'react';
-import { v4 as uuidv4 } from 'uuid'; // For unique IDs
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { v4 as uuidv4 } from 'uuid';
 import Sidebar from './Sidebar';
 import ChatArea from './ChatArea';
 
-// Changed key for clarity, reflects the new purpose
 const LOCAL_STORAGE_KEY = 'robotControlAppHistory';
 
 function App() {
-  // State variable names kept for simplicity, but conceptually they hold 'tasks' or 'command logs'
-  const [commandHistory, setCommandHistory] = useState([]); // Stores all command logs: [{ id, title, messages: [], createdAt }]
-  const [activeLogId, setActiveLogId] = useState(null); // ID of the currently selected command log
+  const [commandHistory, setCommandHistory] = useState([]);
+  const [activeLogId, setActiveLogId] = useState(null);
+  const [isSidebarOpen, setIsSidebarOpen] = useState(false); // State for mobile sidebar
 
-  // Load command history AND set initial active log
+  // --- Load history --- (No changes needed here, logic remains the same)
   useEffect(() => {
     let loadedSuccessfully = false;
     try {
@@ -19,38 +18,29 @@ function App() {
       if (storedHistory) {
         let parsedHistory = JSON.parse(storedHistory);
         if (Array.isArray(parsedHistory) && parsedHistory.length > 0) {
-          parsedHistory.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0)); // Newest first
+          // Ensure createdAt exists and sort
+          parsedHistory = parsedHistory.map(log => ({ ...log, createdAt: log.createdAt || 0 }));
+          parsedHistory.sort((a, b) => b.createdAt - a.createdAt);
           setCommandHistory(parsedHistory);
-          setActiveLogId(parsedHistory[0].id); // Activate the newest log
+          // Activate the newest valid log, handle potential null activeLogId later
+          setActiveLogId(parsedHistory[0]?.id || null);
           loadedSuccessfully = true;
         }
       }
     } catch (error) {
-      // Updated error message
       console.error("Failed to load or parse command history from local storage:", error);
+      localStorage.removeItem(LOCAL_STORAGE_KEY); // Clear potentially corrupted data
     }
 
-    // If loading failed or history was empty, create a new log
     if (!loadedSuccessfully) {
-      // Updated log message
       console.log("No valid command history found, creating a new task log.");
-      const newLogId = uuidv4();
-      const newLog = {
-        id: newLogId,
-        // Changed default title
-        title: 'New Task Sequence',
-        messages: [],
-        createdAt: Date.now()
-      };
-      setCommandHistory([newLog]); // Initialize history with the new log
-      setActiveLogId(newLogId); // Activate the new log
+      handleNewTask(false); // Create initial task but don't set it active yet if history loaded but was empty/invalid
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []); // Run only once on initial mount
+  }, []); // Run only once
 
-  // Save command history to local storage whenever it changes
+  // --- Save history --- (No changes needed)
   useEffect(() => {
-    // Save threadId along with other data
     if (commandHistory.length > 0 || localStorage.getItem(LOCAL_STORAGE_KEY)) {
        try {
           localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(commandHistory));
@@ -60,26 +50,45 @@ function App() {
     }
  }, [commandHistory]);
 
-  // Get messages for the currently active command log
-  const activeLogMessages = useCallback(() => {
-    const activeLog = commandHistory.find(log => log.id === activeLogId);
-    return activeLog ? activeLog.messages : [];
+
+  // --- Get active log & messages ---
+  const activeLog = useMemo(() => {
+      return commandHistory.find(log => log.id === activeLogId);
   }, [commandHistory, activeLogId]);
 
-  const handleNewTask = useCallback(() => {
+  const activeLogMessages = useMemo(() => {
+      return activeLog ? activeLog.messages : [];
+  }, [activeLog]);
+
+  const activeLogTitle = useMemo(() => {
+      return activeLog ? activeLog.title : 'No Task Selected';
+  }, [activeLog]);
+
+
+  // --- Handlers ---
+
+  const handleNewTask = useCallback((setActive = true) => { // Added setActive flag
     const newLogId = uuidv4();
     const newLog = {
        id: newLogId,
        title: 'New Task Sequence',
        messages: [],
        createdAt: Date.now(),
-       threadId: null // Initialize threadId
+       threadId: null
     };
+    // Add to the beginning of the array
     setCommandHistory(prevHistory => [newLog, ...prevHistory]);
-    setActiveLogId(newLogId);
+    if (setActive) {
+        setActiveLogId(newLogId);
+        setIsSidebarOpen(false); // Close sidebar on mobile when creating new task
+    }
+    // If called during initial load without valid history, this creates the first item
+    // but doesn't set it active immediately if setActive is false.
+    // If history *was* valid but empty, setActive=true makes it active.
+     return newLogId; // Return ID for potential immediate use
  }, []);
 
-  // Function to update threadId for a log
+
   const setThreadIdForLog = useCallback((logId, threadId) => {
     setCommandHistory(prevHistory =>
        prevHistory.map(log =>
@@ -89,140 +98,187 @@ function App() {
     console.log(`Thread ID ${threadId} set for log ${logId}`);
  }, []);
 
-
- // Get active thread ID
  const getActiveThreadId = useCallback(() => {
-   const activeLog = commandHistory.find(log => log.id === activeLogId);
    return activeLog ? activeLog.threadId : null;
- }, [commandHistory, activeLogId]);
+ }, [activeLog]);
 
-
-  // Function to select an existing command log
   const handleSelectLog = useCallback((logId) => {
     setActiveLogId(logId);
+    setIsSidebarOpen(false); // Close sidebar on mobile when selecting a log
   }, []);
 
-   // Function to delete a command log
-   const handleDeleteLog = useCallback((logIdToDelete) => {
+  const handleDeleteLog = useCallback((logIdToDelete) => {
+    let nextActiveLogId = activeLogId;
+
     setCommandHistory(prevHistory => {
         const updatedHistory = prevHistory.filter(log => log.id !== logIdToDelete);
-        // If the deleted log was active, select the newest remaining log
+
         if (activeLogId === logIdToDelete) {
             if (updatedHistory.length > 0) {
+                // Sort by date again to be sure (or rely on existing order if always prepended)
                 updatedHistory.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-                setActiveLogId(updatedHistory[0].id);
+                nextActiveLogId = updatedHistory[0].id;
             } else {
-                setActiveLogId(null); // No logs left
+                nextActiveLogId = null; // No logs left
             }
         }
-        return updatedHistory; // Return the filtered history
+
+        // If no logs left after deletion, create a new one automatically
+        if (updatedHistory.length === 0) {
+             console.log("Last log deleted, creating a new one.");
+             const newId = handleNewTask(false); // Create but don't activate yet
+             nextActiveLogId = newId; // Set this new one as the next active
+             // Note: handleNewTask already updated commandHistory, so just return [] to avoid double update?
+             // Let's simplify: Let handleNewTask update state, then set the active ID.
+             setActiveLogId(newId); // Directly set the new ID as active
+             return []; // History will be set by handleNewTask's setState call
+        } else {
+             setActiveLogId(nextActiveLogId); // Update active ID if it changed
+             return updatedHistory; // Return the filtered history
+        }
     });
-   }, [activeLogId]);
+   }, [activeLogId, handleNewTask]); // Added handleNewTask dependency
 
 
    // Modified function to add messages (now handles AI streaming placeholder)
    const addMessageToActiveLog = useCallback((messageData) => {
-    // messageData could be:
-    // { text, sender, isError } for user message or complete AI message
-    // { id, sender, type: 'placeholder' } for starting AI stream
-    // { id, textChunk } for streaming update
-    // { id, isError, final: true } for stream end/error
-
     if (!activeLogId) {
         console.warn("Attempted to add message with no active command log ID.");
+        // Optionally, create a new task if one isn't active? Or show an error.
+        // For now, just return.
         return;
     }
 
     setCommandHistory(prevHistory => {
-        // Find the index of the active log
         const logIndex = prevHistory.findIndex(log => log.id === activeLogId);
-        if (logIndex === -1) return prevHistory; // Should not happen
-
-        const activeLog = prevHistory[logIndex];
-        let updatedMessages = [...activeLog.messages];
-        let updatedTitle = activeLog.title;
-
-        if (messageData.type === 'placeholder' && messageData.sender === 'ai') {
-            // Add a placeholder message object for the AI response
-            updatedMessages.push({
-                id: messageData.id, // Use ID generated by ChatArea
-                text: '', // Start empty
-                sender: 'ai',
-                timestamp: Date.now(),
-                isError: false,
-                streaming: true // Flag for ongoing stream
-            });
-        } else if (messageData.id && messageData.textChunk) {
-            // Find the streaming message and append the chunk
-            updatedMessages = updatedMessages.map(msg =>
-                msg.id === messageData.id && msg.streaming
-                    ? { ...msg, text: msg.text + messageData.textChunk }
-                    : msg
-            );
-        } else if (messageData.id && messageData.final !== undefined) {
-            // Mark the streaming message as complete
-            updatedMessages = updatedMessages.map(msg =>
-                msg.id === messageData.id
-                    ? { ...msg, streaming: false, isError: !!messageData.isError } // Finalize error state
-                    : msg
-            );
-        } else if (messageData.sender === 'user') {
-            // Handle user message (update title if needed)
-            updatedTitle = (activeLog.title === 'New Task Sequence' && activeLog.messages.length === 0)
-               ? messageData.text.substring(0, 35).trim() + (messageData.text.length > 35 ? '...' : '')
-               : activeLog.title;
-
-            updatedMessages.push({
-                id: uuidv4(),
-                text: messageData.text,
-                sender: 'user',
-                timestamp: Date.now(),
-                isError: false
-            });
+        if (logIndex === -1) {
+            console.error("Active log ID not found in history array!");
+            return prevHistory;
         }
-        // Add handling for complete non-streaming AI messages if needed
 
-        // Create the updated log object
+        const currentActiveLog = prevHistory[logIndex];
+        let updatedMessages = [...currentActiveLog.messages];
+        let updatedTitle = currentActiveLog.title;
+        const messageId = messageData.id || uuidv4(); // Ensure messages have IDs
+
+        switch (messageData.type) {
+            case 'placeholder':
+                updatedMessages.push({
+                    id: messageId, // Use ID generated by ChatArea/caller
+                    text: '', // Start empty
+                    sender: 'ai',
+                    timestamp: Date.now(),
+                    isError: false,
+                    streaming: true
+                });
+                break;
+            case 'update': // Streaming update
+                updatedMessages = updatedMessages.map(msg =>
+                    msg.id === messageData.id && msg.streaming
+                        ? { ...msg, text: msg.text + messageData.textChunk }
+                        : msg
+                );
+                break;
+            case 'final': // Stream end/error
+                updatedMessages = updatedMessages.map(msg =>
+                    msg.id === messageData.id
+                        ? { ...msg, streaming: false, isError: !!messageData.isError, text: msg.text || messageData.text || '' } // Finalize error state & ensure text exists
+                        : msg
+                );
+                break;
+            case 'user': // User message (check if this is still how it's passed)
+                 // Or handle user messages directly if type isn't explicitly passed
+                 updatedTitle = (currentActiveLog.title === 'New Task Sequence' && currentActiveLog.messages.length === 0)
+                 ? messageData.text.substring(0, 35).trim() + (messageData.text.length > 35 ? '...' : '')
+                 : currentActiveLog.title;
+
+                 updatedMessages.push({
+                     id: messageId,
+                     text: messageData.text,
+                     sender: 'user',
+                     timestamp: Date.now(),
+                     isError: false
+                 });
+                 break;
+             default: // Handle non-streaming AI or user messages without explicit type
+                  if(messageData.sender === 'user') {
+                     updatedTitle = (currentActiveLog.title === 'New Task Sequence' && currentActiveLog.messages.length === 0)
+                         ? messageData.text.substring(0, 35).trim() + (messageData.text.length > 35 ? '...' : '')
+                         : currentActiveLog.title;
+
+                     updatedMessages.push({
+                         id: messageId,
+                         text: messageData.text,
+                         sender: 'user',
+                         timestamp: Date.now(),
+                         isError: false
+                     });
+                  } else if (messageData.sender === 'ai') {
+                      // Handle complete AI message if needed (though streaming handles this)
+                      updatedMessages.push({
+                         id: messageId,
+                         text: messageData.text,
+                         sender: 'ai',
+                         timestamp: Date.now(),
+                         isError: !!messageData.isError, // Capture potential error flag
+                         streaming: false // Ensure not marked as streaming
+                     });
+                  } else {
+                     console.warn("Unknown message data format:", messageData);
+                  }
+                 break;
+
+        }
+
+
         const updatedLog = {
-            ...activeLog,
+            ...currentActiveLog,
             title: updatedTitle,
-            messages: updatedMessages
+            messages: updatedMessages,
+            // Optionally update a 'lastModified' timestamp here
+             lastModified: Date.now()
         };
 
-        // Create the new history array
+        // Create the new history array, replacing the updated log
         const newHistory = [...prevHistory];
         newHistory[logIndex] = updatedLog;
 
-        // Keep history sorted (optional, if you prefer strict chronological order)
-        // newHistory.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+        // Optional: Re-sort history if title change affects order (unlikely) or if lastModified is used for sorting
+        // newHistory.sort((a, b) => (b.lastModified || b.createdAt || 0) - (a.lastModified || a.createdAt || 0));
 
         return newHistory;
     });
 
-}, [activeLogId]);
-
+}, [activeLogId]); // Removed dependency cycle with itself
 
   return (
-    <div className="flex h-screen overflow-hidden bg-gray-900 text-gray-100">
+    // Add relative positioning for absolute positioned mobile sidebar
+    <div className="relative flex h-screen overflow-hidden bg-gray-900 text-gray-100">
       {/* Sidebar */}
       <Sidebar
-        // Pass down history and active ID
-        commandHistory={commandHistory} // Pass the history (conceptually command logs)
-        activeLogId={activeLogId}      // Pass the active ID
-        onNewTask={handleNewTask}       // Pass the handler for creating new logs
-        onSelectLog={handleSelectLog}   // Pass the handler for selecting logs
-        onDeleteLog={handleDeleteLog}   // Pass the handler for deleting logs
+        commandHistory={commandHistory}
+        activeLogId={activeLogId}
+        onNewTask={handleNewTask}
+        onSelectLog={handleSelectLog}
+        onDeleteLog={handleDeleteLog}
+        // Pass sidebar state and control for mobile
+        isSidebarOpen={isSidebarOpen}
+        setIsSidebarOpen={setIsSidebarOpen}
       />
 
+      {/* Chat Area */}
       <ChatArea
-           key={activeLogId || 'no-log-selected'}
-           messages={activeLogMessages()}
-           // Pass down necessary functions and data for streaming
-           onSendMessage={addMessageToActiveLog} // Handles adding user message & stream updates
-           setThreadIdForLog={setThreadIdForLog} // To update thread ID in App state
+           key={activeLogId || 'no-log-selected'} // Key ensures component remounts/resets state on log change
+           messages={activeLogMessages}
+           onSendMessage={addMessageToActiveLog}
+           setThreadIdForLog={setThreadIdForLog}
            chatId={activeLogId}
-           activeThreadId={getActiveThreadId()} // Pass current thread ID
-           />
+           activeThreadId={getActiveThreadId()}
+           // Pass sidebar toggle function and active chat title for mobile header
+           onToggleSidebar={() => setIsSidebarOpen(!isSidebarOpen)}
+           activeChatTitle={activeLogTitle}
+           isLoading={!activeLog && commandHistory.length > 0} // Indicate loading if history exists but no log selected yet
+       />
     </div>
   );
 }

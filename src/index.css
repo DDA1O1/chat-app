@@ -1,2 +1,40 @@
+/* In src/index.css */
 @import "tailwindcss";
 
+@layer utilities {
+  /* Add a subtle pulse for streaming AI messages */
+  .animate-pulse-subtle {
+    animation: pulse-subtle 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+
+  @keyframes pulse-subtle {
+    50% {
+      opacity: .75;
+    }
+  }
+}
+
+/* Improve scrollbar styling if needed (already using tailwind-scrollbar plugin in package.json, ensure setup if not) */
+/* Example for Webkit browsers */
+::-webkit-scrollbar {
+  width: 8px; /* Adjust width */
+  height: 8px;
+}
+::-webkit-scrollbar-track {
+  background: transparent; /* Or match track color */
+}
+::-webkit-scrollbar-thumb {
+  background-color: theme('colors.gray.500'); /* Use Tailwind color */
+  border-radius: 4px;
+  border: 2px solid transparent; /* Creates padding around thumb */
+   background-clip: content-box;
+}
+::-webkit-scrollbar-thumb:hover {
+  background-color: theme('colors.gray.400'); /* Hover color */
+}
+
+/* Basic scrollbar styling for Firefox */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: theme('colors.gray.500') transparent; /* thumb color track color */
+}
