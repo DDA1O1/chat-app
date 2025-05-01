@@ -24,7 +24,7 @@ const AppIcon = () => (
 
 
 // Renamed props to match App.jsx
-function Sidebar({ commandHistory, activeLogId, onNewTask, onSelectLog, onDeleteLog }) {
+function Sidebar({ commandHistory = [], activeLogId, onNewTask, onSelectLog, onDeleteLog }) { // Added default for commandHistory
 
   // Helper to format date (unchanged, but applies to command logs)
   const formatDateHeading = (timestamp) => {
@@ -34,25 +34,44 @@ function Sidebar({ commandHistory, activeLogId, onNewTask, onSelectLog, onDelete
       yesterday.setDate(yesterday.getDate() - 1);
       if (date.toDateString() === today.toDateString()) return "Today";
       if (date.toDateString() === yesterday.toDateString()) return "Yesterday";
+      // Fallback for invalid dates if needed
+      if (isNaN(date.getTime())) return "Unknown Date";
       return date.toLocaleDateString();
   };
 
   // Group command logs by date
   const groupedLogs = commandHistory.reduce((acc, log) => {
-    const dateKey = formatDateHeading(log.createdAt || Date.now()); // Use creation time
+    // Ensure log and createdAt exist, provide a fallback time if needed
+    const timestamp = log?.createdAt || Date.now();
+    const dateKey = formatDateHeading(timestamp);
     if (!acc[dateKey]) {
       acc[dateKey] = [];
     }
-    acc[dateKey].push(log);
+    // Make sure log has an id and title, provide fallbacks
+    acc[dateKey].push({
+        id: log?.id || `unknown-${Math.random()}`,
+        title: log?.title || 'Untitled Log',
+        createdAt: timestamp // keep original or fallback timestamp
+    });
     return acc;
   }, {});
 
   const sortedGroupKeys = Object.keys(groupedLogs).sort((a, b) => {
+      // Handle potential "Unknown Date" group
       if (a === "Today") return -1;
       if (b === "Today") return 1;
       if (a === "Yesterday") return -1;
       if (b === "Yesterday") return 1;
-      return new Date(b) - new Date(a);
+      // Attempt date comparison, fallback if not standard date strings
+      const dateA = new Date(a);
+      const dateB = new Date(b);
+      if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+          return dateB - dateA; // Sort recent dates first
+      }
+      // Fallback sort: keep unknown dates or handle specific order
+      if (a === "Unknown Date") return 1; // Put Unknown last
+      if (b === "Unknown Date") return -1;
+      return a.localeCompare(b); // Alphabetical for other keys
   });
 
 
@@ -93,36 +112,41 @@ function Sidebar({ commandHistory, activeLogId, onNewTask, onSelectLog, onDelete
              <ul className="space-y-1">
                {groupedLogs[groupKey].map(log => (
                  <li key={log.id} className="relative group">
-                    <button
-                        // Use the log selection handler
+                   {/* ****** CHANGE HERE: Use DIV instead of BUTTON ****** */}
+                   <div
+                        role="button" // Accessibility: informs assistive tech this is interactive
+                        tabIndex={0} // Accessibility: makes it keyboard focusable
                         onClick={() => onSelectLog(log.id)}
-                        className={`w-full text-left flex items-center justify-between text-sm px-3 py-2 rounded-md truncate transition-colors duration-150 ${
-                            // Check against activeLogId
+                        // Accessibility: Allow activation with Enter/Space keys
+                        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); onSelectLog(log.id); } }}
+                        className={`w-full text-left flex items-center justify-between text-sm px-3 py-2 rounded-md truncate transition-colors duration-150 cursor-pointer focus:outline-none ${ // Add cursor-pointer and basic focus style
                             activeLogId === log.id
                             ? 'bg-gray-700 text-white font-medium shadow-inner' // Added inner shadow for active state
-                            : 'text-gray-300 hover:bg-gray-700/50'
+                            : 'text-gray-300 hover:bg-gray-700/50 focus:bg-gray-700/60' // Hover and Focus styles for non-active
                         }`}
                     >
                       {/* Display log title */}
-                      <span className="flex-1 truncate pr-2">{log.title}</span>
-                      {/* Delete button */}
+                      <span className="flex-1 truncate pr-8 pointer-events-none"> {/* Increased padding-right to avoid overlap; pointer-events-none helps ensure div click */}
+                        {log.title}
+                      </span>
+                      {/* Delete button (remains a button, positioned absolutely) */}
                       <button
                         onClick={(e) => {
-                            e.stopPropagation(); // Prevent log selection
-                            // Updated confirmation message
+                            e.stopPropagation(); // IMPORTANT: Prevent triggering the div's onClick
                             if (window.confirm(`Are you sure you want to delete the task log "${log.title}"? This cannot be undone.`)) {
                                 onDeleteLog(log.id); // Use the delete log handler
                             }
                         }}
                         // Adjusted visibility/styling slightly
-                        className="absolute right-1.5 top-1/2 transform -translate-y-1/2 p-1 rounded text-gray-500 hover:text-red-400 hover:bg-gray-600 opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-red-500 transition-all duration-150"
+                        className="absolute right-1.5 top-1/2 transform -translate-y-1/2 p-1 rounded text-gray-500 hover:text-red-400 hover:bg-gray-600 opacity-0 group-hover:opacity-100 focus:opacity-100 focus:outline-none focus:ring-1 focus:ring-red-500 transition-all duration-150 z-10" // Ensure button is clickable (z-index)
                         // Updated labels
                         aria-label="Delete task log"
                         title="Delete task log"
                       >
                           <DeleteIcon />
                       </button>
-                    </button>
+                    {/* ****** CHANGE HERE: Close DIV instead of BUTTON ****** */}
+                    </div>
                  </li>
                ))}
              </ul>
