@@ -85,7 +85,19 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
     if (!trimmedInput || isSending || !chatId) return;
 
     // Abort previous stream if any
-    if (eventSourceRef.current) { /* ... close logic ... */ }
+    if (eventSourceRef.current) {
+        console.log("Aborting previous EventSource stream.");
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+        // If an AI message was being streamed, finalize it as interrupted (optional)
+        if (currentAiMessageIdRef.current) {
+            // Example: Update message to indicate interruption, or just leave as is
+            // onSendMessage({ id: currentAiMessageIdRef.current, type: 'final', isError: true, text: 'Interrupted' });
+            currentAiMessageIdRef.current = null; // Clear ref after closing
+        }
+        setIsSending(false); // Ensure sending state is reset if previous stream was manually closed
+    }
+
 
     // --- UI Updates ---
     const userMessageText = trimmedInput; // Store before clearing
@@ -94,7 +106,14 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
     setIsSending(true);
     // Use 'auto' scroll after sending for immediate feedback
     scrollToBottom("auto");
-    setTimeout(() => inputRef.current?.focus(), 0); // Refocus after state update
+    setTimeout(() => { // Reset textarea height *after* clearing value
+        if (inputRef.current) {
+            inputRef.current.style.height = 'auto';
+            inputRef.current.style.height = `${inputRef.current.scrollHeight}px`;
+            inputRef.current.focus();
+        }
+    }, 0);
+
 
     // --- Prepare for AI Response ---
     const aiMessageId = uuidv4();
@@ -106,30 +125,69 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
 
     try {
         // --- STEP 1: POST to generate-command ---
-        const initialResponse = await fetch('/api/generate-command', { /* ... */ });
-        if (!initialResponse.ok) { /* ... error handling ... */ }
-        const data = await initialResponse.json();
+        // ********** FIX STARTS HERE **********
+        const initialResponse = await fetch('/api/generate-command', {
+            method: 'POST', // Explicitly set method to POST
+            headers: {
+                'Content-Type': 'application/json', // Set content type header
+            },
+            body: JSON.stringify({ // Send data in the body
+                userPrompt: userMessageText,
+                threadId: currentThreadId // Send existing threadId or null/undefined
+            }),
+        });
+        // ********** FIX ENDS HERE **********
+
+        // Check if the initial response was successful (e.g., 200 OK)
+        if (!initialResponse.ok) {
+            // Attempt to read error message from backend if possible
+            let errorData;
+            try {
+                errorData = await initialResponse.json(); // Try parsing potential JSON error first
+            } catch (parseError) {
+                errorData = { error: await initialResponse.text() }; // Fallback to text response
+            }
+            // Throw an error including status and message
+            throw new Error(`Error ${initialResponse.status}: ${errorData?.error || 'Failed to initiate command generation.'}`);
+        }
+
+        const data = await initialResponse.json(); // Now this should work if response is ok (200)
         const returnedThreadId = data.threadId;
 
-        if (!returnedThreadId) throw new Error("Did not receive threadId from server.");
+        if (!returnedThreadId) {
+            // Handle case where backend successfully responded but didn't include threadId
+            throw new Error("Did not receive threadId from server even though request was successful.");
+        }
 
         // Update threadId in parent state if it's new for this chat
         if (returnedThreadId !== currentThreadId) {
             setThreadIdForLog(chatId, returnedThreadId);
             currentThreadId = returnedThreadId; // Use the new ID for the SSE connection
+            console.log("Using new/updated threadId:", currentThreadId);
+        } else {
+            console.log("Using existing threadId:", currentThreadId);
         }
 
         // --- STEP 2: GET from stream-response (SSE) ---
+        console.log(`Connecting to SSE stream for threadId: ${currentThreadId}`);
         const es = new EventSource(`/api/stream-response?threadId=${currentThreadId}`);
         eventSourceRef.current = es;
 
-        es.onopen = () => { /* ... */ };
+        es.onopen = () => {
+            console.log("SSE Connection Opened");
+        };
 
         es.onmessage = (event) => {
             try {
                 const data = JSON.parse(event.data);
                 const currentAiMsgId = currentAiMessageIdRef.current;
-                if (!currentAiMsgId) return; // Stale event
+
+                // Add check: Only process if the message ID matches the current active one
+                if (!currentAiMsgId || data.forMessageId && data.forMessageId !== currentAiMsgId) {
+                     // console.warn("Received SSE event for a different/stale message ID. Ignoring.");
+                     return; // Stale event or belongs to an interrupted request
+                }
+
 
                 if (data.type === 'chunk' && typeof data.text === 'string') {
                     onSendMessage({ id: currentAiMsgId, textChunk: data.text, type: 'update' });
@@ -140,23 +198,58 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
                     onSendMessage({ id: currentAiMsgId, final: true, isError: false, type: 'final' });
                     setIsSending(false);
                     setTimeout(() => inputRef.current?.focus(), 0);
-                    es.close();
-                    eventSourceRef.current = null;
+                    if (eventSourceRef.current === es) { // Only close if it's the current ref
+                       es.close();
+                       eventSourceRef.current = null;
+                    }
                     currentAiMessageIdRef.current = null;
                 } else if (data.type === 'error') {
                     console.error("SSE Error Event:", data.message);
                     onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: data.message || 'An error occurred during processing.', type: 'final' });
                     setIsSending(false);
                     setTimeout(() => inputRef.current?.focus(), 0);
-                    es.close();
-                    eventSourceRef.current = null;
+                    if (eventSourceRef.current === es) { // Only close if it's the current ref
+                        es.close();
+                        eventSourceRef.current = null;
+                    }
                     currentAiMessageIdRef.current = null;
-                } else { /* ... unknown type handling ... */ }
+                } else {
+                    console.warn("Received unknown SSE message type:", data.type, data);
+                }
 
-            } catch (error) { /* ... parsing error handling ... */ }
+            } catch (error) {
+                 console.error("Error parsing SSE message data:", error, "Raw data:", event.data);
+                 // Optionally update UI to show parsing error
+                 const currentAiMsgId = currentAiMessageIdRef.current;
+                 if (currentAiMsgId) {
+                     onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: 'Error processing response stream.', type: 'final' });
+                 }
+                 setIsSending(false);
+                 setTimeout(() => inputRef.current?.focus(), 0);
+                  if (eventSourceRef.current === es) { // Only close if it's the current ref
+                     es.close();
+                     eventSourceRef.current = null;
+                  }
+                 currentAiMessageIdRef.current = null;
+            }
         };
 
-        es.onerror = (error) => { /* ... connection error handling ... */ };
+        es.onerror = (error) => {
+            console.error("EventSource failed:", error);
+            const currentAiMsgId = currentAiMessageIdRef.current;
+            if (currentAiMsgId) {
+                 onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: 'Connection error during response streaming.', type: 'final' });
+            } else {
+                onSendMessage({ sender: 'ai', isError: true, text: 'Connection error during response streaming.' });
+            }
+            setIsSending(false);
+            setTimeout(() => inputRef.current?.focus(), 0);
+            if (eventSourceRef.current === es) { // Only close if it's the current ref
+                es.close(); // Close the connection on error
+                eventSourceRef.current = null;
+            }
+            currentAiMessageIdRef.current = null; // Clear the ref
+        };
 
     } catch (error) { // Catch errors from POST or EventSource setup
         console.error("Failed during command sending process:", error);
@@ -165,12 +258,15 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
             // Update the placeholder message to show the error
             onSendMessage({ id: currentAiMsgId, final: true, isError: true, text: `Error: ${error.message || 'Failed to get response.'}`, type: 'final' });
         } else {
-            // If error happened before placeholder (less likely now), maybe add a new error message
+            // If error happened before placeholder, add a new error message
             onSendMessage({ sender: 'ai', isError: true, text: `Error: ${error.message || 'Failed to initiate request.'}` });
         }
         setIsSending(false);
         setTimeout(() => inputRef.current?.focus(), 0);
-        if (eventSourceRef.current) { eventSourceRef.current.close(); eventSourceRef.current = null; }
+        if (eventSourceRef.current) { // Ensure cleanup if EventSource was created before error
+             eventSourceRef.current.close();
+             eventSourceRef.current = null;
+        }
         currentAiMessageIdRef.current = null; // Clear the ref
     }
 }, [inputValue, isSending, chatId, activeThreadId, onSendMessage, setThreadIdForLog, scrollToBottom]); // Dependencies
@@ -232,10 +328,10 @@ function ChatArea({ messages = [], onSendMessage, chatId, activeThreadId, setThr
              </div>
          ) : (
            // --- Message Mapping ---
-           messages.map((message) => (
+           messages.map((message, index) => ( // Add index for fallback key if needed
             <div
-                // Use message.id if available, fall back to uuid but log warning
-                key={message.id || uuidv4()}
+                // Use message.id if available, add defensive check
+                key={message.id || `msg-${index}`} // Fallback key
                 className={`flex items-start gap-2.5 md:gap-3 ${ /* Slightly smaller gap on mobile */
                     message.sender === 'user' ? 'justify-end' : 'justify-start'
                 }`}
