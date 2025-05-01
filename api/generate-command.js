@@ -72,7 +72,7 @@ export default async function handler(req, res) {
         2.  If the input is a request to control the Tello drone or ask about its status (like speed, battery), use the Tello SDK documentation below to generate the precise SDK command(s).
         3.  Pay close attention to command syntax, parameters, units (cm, degrees), and value ranges.
         4.  If a command requires parameters and the user doesn't provide valid ones, respond with "Error: Missing or invalid parameters."
-        5.  If the user's request seems like a drone command but is ambiguous or doesn't match any known command, respond with "Error: Command not understood."
+        5.  If the user's request seems like a drone command but is ambiguous or doesn't match any known command, respond with "Please clarify more"
         6.  If generating SDK commands or specific errors, respond ONLY with the raw SDK command string(s) or the specific error message.
 
         **Secondary Task (Conversational Fallback):**
